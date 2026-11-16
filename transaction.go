@@ -28,27 +28,27 @@ import (
 )
 
 var (
-	errMissingToken = appservice.Error{
+	errMissingToken = httpError{
 		HTTPStatus: http.StatusForbidden,
 		ErrorCode:  "M_MISSING_TOKEN",
 		Message:    "Missing authorization header",
 	}
-	errUnknownToken = appservice.Error{
+	errUnknownToken = httpError{
 		HTTPStatus: http.StatusForbidden,
 		ErrorCode:  "M_UNKNOWN_TOKEN",
 		Message:    "Unknown authorization token",
 	}
-	errBadJSON = appservice.Error{
+	errBadJSON = httpError{
 		HTTPStatus: http.StatusBadRequest,
 		ErrorCode:  "M_BAD_JSON",
 		Message:    "Failed to decode request JSON",
 	}
-	errSendFail = appservice.Error{
+	errSendFail = httpError{
 		HTTPStatus: http.StatusBadGateway,
 		ErrorCode:  "FI.MAU.WS_SEND_FAIL",
 		Message:    "Failed to send data through websocket",
 	}
-	errNotConnected = appservice.Error{
+	errNotConnected = httpError{
 		HTTPStatus: http.StatusBadGateway,
 		ErrorCode:  "FI.MAU.WS_NOT_CONNECTED",
 		Message:    "Endpoint is not connected to websocket",
@@ -93,7 +93,7 @@ func writeTransaction(w http.ResponseWriter, az *AppService, txnName, logContent
 			errSendFail.Write(w)
 		} else {
 			log.Printf("Sent %s to %s successfully", txnName, az.ID)
-			appservice.WriteBlankOK(w)
+			writeBlankOK(w)
 		}
 	} else {
 		log.Printf("Rejecting %s to %s: websocket not connected", txnName, az.ID)
@@ -116,14 +116,21 @@ func putTransaction(w http.ResponseWriter, r *http.Request) {
 	if txn.DeviceOTKCount == nil && txn.MSC3202DeviceOTKCount != nil {
 		txn.DeviceOTKCount = txn.MSC3202DeviceOTKCount
 	}
+	// To-device events carry the room keys bridges need to decrypt messages (MSC2409).
+	if txn.ToDeviceEvents == nil && txn.MSC2409ToDeviceEvents != nil {
+		txn.ToDeviceEvents = txn.MSC2409ToDeviceEvents
+	}
+	if txn.FallbackKeys == nil && txn.MSC3202FallbackKeys != nil {
+		txn.FallbackKeys = txn.MSC3202FallbackKeys
+	}
 	deviceListChanges := 0
 	if txn.DeviceLists != nil {
 		deviceListChanges = len(txn.DeviceLists.Changed)
 	}
 	vars := mux.Vars(r)
 	txnID := vars["txnID"]
-	logContent := fmt.Sprintf("%d events, %d ephemeral events, %d OTK counts and %d device list changes",
-		len(txn.Events), len(txn.EphemeralEvents), len(txn.DeviceOTKCount), deviceListChanges)
+	logContent := fmt.Sprintf("%d events, %d ephemeral events, %d to-device events, %d OTK counts and %d device list changes",
+		len(txn.Events), len(txn.EphemeralEvents), len(txn.ToDeviceEvents), len(txn.DeviceOTKCount), deviceListChanges)
 	txnName := fmt.Sprintf("transaction %s", txnID)
 	writeTransaction(w, az, txnName, logContent, &appservice.WebsocketTransaction{
 		Status:      "ok",
@@ -133,12 +140,12 @@ func putTransaction(w http.ResponseWriter, r *http.Request) {
 }
 
 type SyncProxyError struct {
-	appservice.Error
+	httpError
 	TxnID string `json:"txn_id"`
 }
 
 func putSyncProxyError(w http.ResponseWriter, r *http.Request) {
-	var txn appservice.Error
+	var txn httpError
 	az := readTransaction(w, r, &txn)
 	if az == nil {
 		return
@@ -150,8 +157,27 @@ func putSyncProxyError(w http.ResponseWriter, r *http.Request) {
 	writeTransaction(w, az, txnName, logContent, &appservice.WebsocketRequest{
 		Command: "syncproxy_error",
 		Data: &SyncProxyError{
-			Error: txn,
-			TxnID: txnID,
+			httpError: txn,
+			TxnID:     txnID,
 		},
 	})
+}
+
+// httpError is a Matrix error response (appservice.Error was removed from mautrix-go).
+type httpError struct {
+	HTTPStatus int    `json:"-"`
+	ErrorCode  string `json:"errcode"`
+	Message    string `json:"error"`
+}
+
+func (e httpError) Write(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(e.HTTPStatus)
+	_ = json.NewEncoder(w).Encode(&e)
+}
+
+func writeBlankOK(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("{}"))
 }
