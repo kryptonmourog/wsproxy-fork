@@ -1,3 +1,14 @@
+# wsproxy-fork
+
+mautrix-wsproxy that also forwards to-device events and one-time/fallback key counts (MSC2409, MSC3202) to the
+bridge, which end-to-bridge encryption over the websocket needs. Used by
+[telegram-bridge-advanced](https://github.com/kryptonmourog/telegram-bridge-advanced) when the bridge runs on
+another server. Image: `ghcr.io/kryptonmourog/wsproxy-fork:<version>`.
+
+The rest of this README is upstream's.
+
+---
+
 # mautrix-wsproxy
 A simple HTTP push -> websocket proxy for Matrix appservices.
 
